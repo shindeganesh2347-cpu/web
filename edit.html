@@ -1,0 +1,151 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KIARA MILLS - Edit Design</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:#fff1f2;color:#451a1a}
+header{background:linear-gradient(120deg,#991b1b,#ef4444);color:white;text-align:center;padding:25px;font-size:30px;font-weight:bold;letter-spacing:2px}
+nav{display:flex;justify-content:center;gap:25px;flex-wrap:wrap;background:white;padding:16px;box-shadow:0 3px 10px #0001}
+nav a{color:#991b1b;text-decoration:none;font-weight:bold}
+main{max-width:700px;width:92%;margin:30px auto;background:white;padding:28px;border-radius:14px;box-shadow:0 5px 20px #0001}
+h2{color:#991b1b}
+label{display:block;margin:16px 0 7px;font-weight:bold;color:#7f1d1d}
+input{width:100%;padding:12px;border:1px solid #fca5a5;border-radius:8px;font-size:15px;background:#fffafa}
+button{padding:12px 18px;border:0;border-radius:7px;color:white;background:#b91c1c;cursor:pointer;font-weight:bold;margin:18px 8px 0 0}
+button:hover{background:#7f1d1d}
+button:disabled{opacity:.6;cursor:not-allowed}
+#message{color:#991b1b;overflow-wrap:anywhere}
+@media(max-width:600px){header{font-size:24px}main{padding:20px}nav{gap:15px}button{width:100%}}
+</style>
+</head>
+<body>
+<header>KIARA MILLS</header>
+<nav>
+<a href="home.html">Dashboard</a>
+<a href="with.html">Design Master</a>
+<a href="stock.html">Stock</a>
+</nav>
+
+<main>
+<h2>Edit Design</h2>
+<form id="editForm">
+<label for="design">Design Number</label>
+<input id="design" required maxlength="100">
+
+<label for="gala">Gala Number</label>
+<input id="gala" maxlength="100">
+
+<label for="colour">Colour</label>
+<input id="colour" maxlength="100">
+
+<label for="total">Total PCS</label>
+<input id="total" type="number" min="0" step="1" required>
+
+<label for="damage">Damage PCS</label>
+<input id="damage" type="number" min="0" step="1" required>
+
+<p id="message" role="status">Loading design...</p>
+
+<button type="submit" id="updateButton">Update Design</button>
+<button type="button" onclick="location.href='stock.html'">Cancel</button>
+</form>
+</main>
+
+<script>
+const API = "/api/designs";
+const recordId = localStorage.getItem("editId");
+const message = document.getElementById("message");
+const updateButton = document.getElementById("updateButton");
+
+async function request(url, options = {}) {
+    const response = await fetch(url, {
+        ...options,
+        headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {})
+        }
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.message || result.error || "Request failed");
+    return result;
+}
+
+async function loadDesign() {
+    if (!recordId) {
+        message.textContent = "No design selected. Open Stock and click Edit.";
+        updateButton.disabled = true;
+        return;
+    }
+
+    try {
+        const result = await request(`${API}/${encodeURIComponent(recordId)}`);
+        const item = result.data ?? result.design ?? result;
+
+        if (!item || item.design_no === undefined) {
+            throw new Error("Design was not found. Check the GET /api/designs/:id response.");
+        }
+
+        document.getElementById("design").value = item.design_no ?? "";
+        document.getElementById("gala").value = item.gala_no ?? "";
+        document.getElementById("colour").value = item.colour ?? "";
+        document.getElementById("total").value = item.total_pcs ?? 0;
+        document.getElementById("damage").value = item.damage_pcs ?? 0;
+
+        message.textContent = "Design loaded. Make your changes.";
+    } catch (error) {
+        message.textContent = "Could not load design: " + error.message;
+        updateButton.disabled = true;
+    }
+}
+
+document.getElementById("editForm").addEventListener("submit", async function(event) {
+    event.preventDefault();
+    if (!recordId) return;
+
+    const design_no = document.getElementById("design").value.trim();
+    const gala_no = document.getElementById("gala").value.trim();
+    const colour = document.getElementById("colour").value.trim();
+    const total_pcs = Number(document.getElementById("total").value);
+    const damage_pcs = Number(document.getElementById("damage").value);
+
+    if (!design_no) {
+        message.textContent = "Design number is required.";
+        return;
+    }
+
+    if (!Number.isInteger(total_pcs) || total_pcs < 0 ||
+        !Number.isInteger(damage_pcs) || damage_pcs < 0 ||
+        damage_pcs > total_pcs) {
+        message.textContent = "Enter valid PCS values. Damage PCS cannot exceed Total PCS.";
+        return;
+    }
+
+    updateButton.disabled = true;
+    updateButton.textContent = "Updating...";
+
+    try {
+        await request(`${API}/${encodeURIComponent(recordId)}`, {
+            method: "PUT",
+            body: JSON.stringify({
+                design_no, gala_no, colour, total_pcs, damage_pcs
+            })
+        });
+
+        localStorage.removeItem("editId");
+        alert("Design updated successfully!");
+        location.href = "stock.html";
+    } catch (error) {
+        message.textContent = "Update failed: " + error.message;
+        updateButton.disabled = false;
+        updateButton.textContent = "Update Design";
+    }
+});
+
+loadDesign();
+</script>
+</body>
+</html>

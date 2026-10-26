@@ -1,6 +1,6 @@
 
 const express = require("express");
-const mysql = require("mysql2/promise");
+const { Pool } = require("pg");
 const path = require("path");
 require("dotenv").config();
 
@@ -11,34 +11,55 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve HTML, CSS, JS files from public folder
+// Serve frontend files
 app.use(express.static(path.join(__dirname, "public")));
 
-// MySQL database connection
-const db = mysql.createPool({
-    host: process.env.DB_HOST || "localhost",
-    user: process.env.DB_USER || "root",
-    password: process.env.DB_PASSWORD || "",
-    database: process.env.DB_NAME || "kmos_inventory",
-    waitForConnections: true,
-    connectionLimit: 10
+// PostgreSQL connection
+if (!process.env.DATABASE_URL) {
+    console.error("DATABASE_URL environment variable is missing.");
+    process.exit(1);
+}
+
+const db = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+    max: 10,
+    connectionTimeoutMillis: 10000,
+    idleTimeoutMillis: 30000
 });
+
+// Create table if it does not exist
+async function initializeDatabase() {
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS designs (
+            id SERIAL PRIMARY KEY,
+            design_no VARCHAR(255) NOT NULL,
+            gala_no VARCHAR(255) NOT NULL DEFAULT '',
+            colour VARCHAR(255) NOT NULL DEFAULT '',
+            total_pcs INTEGER NOT NULL DEFAULT 0
+                CHECK (total_pcs >= 0),
+            damage_pcs INTEGER NOT NULL DEFAULT 0
+                CHECK (damage_pcs >= 0 AND damage_pcs <= total_pcs),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+}
 
 // Home page
 app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "public", "home.html"));
 });
 
-// Check backend and database
+// Health check
 app.get("/api/health", async (req, res) => {
     try {
         await db.query("SELECT 1");
         res.json({
             success: true,
-            message: "KMOS backend and MySQL connected!"
+            message: "KMOS backend and PostgreSQL connected!"
         });
     } catch (error) {
-        console.error(error.message);
+        console.error("Health check failed:", error.message);
         res.status(500).json({
             success: false,
             message: "Database connection failed."
@@ -49,12 +70,12 @@ app.get("/api/health", async (req, res) => {
 // Get all designs
 app.get("/api/designs", async (req, res) => {
     try {
-        const [rows] = await db.query(
+        const result = await db.query(
             "SELECT * FROM designs ORDER BY id DESC"
         );
-        res.json(rows);
+        res.json(result.rows);
     } catch (error) {
-        console.error(error);
+        console.error("Get designs failed:", error.message);
         res.status(500).json({ error: "Unable to load designs." });
     }
 });
@@ -62,23 +83,23 @@ app.get("/api/designs", async (req, res) => {
 // Get one design
 app.get("/api/designs/:id", async (req, res) => {
     try {
-        const [rows] = await db.execute(
-            "SELECT * FROM designs WHERE id = ?",
+        const result = await db.query(
+            "SELECT * FROM designs WHERE id = $1",
             [req.params.id]
         );
 
-        if (rows.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({ error: "Design not found." });
         }
 
-        res.json(rows[0]);
+        res.json(result.rows[0]);
     } catch (error) {
-        console.error(error);
+        console.error("Get design failed:", error.message);
         res.status(500).json({ error: "Unable to load design." });
     }
 });
 
-// Add a design
+// Add design
 app.post("/api/designs", async (req, res) => {
     const {
         design_no,
@@ -103,15 +124,16 @@ app.post("/api/designs", async (req, res) => {
         damage > total
     ) {
         return res.status(400).json({
-            error: "Enter valid piece counts. Damage cannot exceed total."
+            error: "Invalid piece counts. Damage cannot exceed total."
         });
     }
 
     try {
-        const [result] = await db.execute(
+        const result = await db.query(
             `INSERT INTO designs
-            (design_no, gala_no, colour, total_pcs, damage_pcs)
-            VALUES (?, ?, ?, ?, ?)`,
+                (design_no, gala_no, colour, total_pcs, damage_pcs)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING *`,
             [
                 String(design_no).trim(),
                 String(gala_no),
@@ -121,19 +143,14 @@ app.post("/api/designs", async (req, res) => {
             ]
         );
 
-        const [rows] = await db.execute(
-            "SELECT * FROM designs WHERE id = ?",
-            [result.insertId]
-        );
-
-        res.status(201).json(rows[0]);
+        res.status(201).json(result.rows[0]);
     } catch (error) {
-        console.error(error);
+        console.error("Add design failed:", error.message);
         res.status(500).json({ error: "Unable to save design." });
     }
 });
 
-// Update a design
+// Update design
 app.put("/api/designs/:id", async (req, res) => {
     const {
         design_no,
@@ -158,19 +175,20 @@ app.put("/api/designs/:id", async (req, res) => {
         damage > total
     ) {
         return res.status(400).json({
-            error: "Enter valid piece counts. Damage cannot exceed total."
+            error: "Invalid piece counts. Damage cannot exceed total."
         });
     }
 
     try {
-        const [result] = await db.execute(
+        const result = await db.query(
             `UPDATE designs SET
-                design_no = ?,
-                gala_no = ?,
-                colour = ?,
-                total_pcs = ?,
-                damage_pcs = ?
-             WHERE id = ?`,
+                design_no = $1,
+                gala_no = $2,
+                colour = $3,
+                total_pcs = $4,
+                damage_pcs = $5
+             WHERE id = $6
+             RETURNING *`,
             [
                 String(design_no).trim(),
                 String(gala_no),
@@ -181,40 +199,26 @@ app.put("/api/designs/:id", async (req, res) => {
             ]
         );
 
-        if (result.affectedRows === 0) {
-            const [rows] = await db.execute(
-                "SELECT id FROM designs WHERE id = ?",
-                [req.params.id]
-            );
-
-            if (rows.length === 0) {
-                return res.status(404).json({
-                    error: "Design not found."
-                });
-            }
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Design not found." });
         }
 
-        const [rows] = await db.execute(
-            "SELECT * FROM designs WHERE id = ?",
-            [req.params.id]
-        );
-
-        res.json(rows[0]);
+        res.json(result.rows[0]);
     } catch (error) {
-        console.error(error);
+        console.error("Update design failed:", error.message);
         res.status(500).json({ error: "Unable to update design." });
     }
 });
 
-// Delete a design
+// Delete design
 app.delete("/api/designs/:id", async (req, res) => {
     try {
-        const [result] = await db.execute(
-            "DELETE FROM designs WHERE id = ?",
+        const result = await db.query(
+            "DELETE FROM designs WHERE id = $1 RETURNING id",
             [req.params.id]
         );
 
-        if (result.affectedRows === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({ error: "Design not found." });
         }
 
@@ -223,25 +227,32 @@ app.delete("/api/designs/:id", async (req, res) => {
             message: "Design deleted successfully."
         });
     } catch (error) {
-        console.error(error);
+        console.error("Delete design failed:", error.message);
         res.status(500).json({ error: "Unable to delete design." });
     }
 });
 
-// Start server after checking MySQL connection
+// Start server
 async function startServer() {
     try {
-        const connection = await db.getConnection();
-        console.log("MySQL database connected successfully!");
-        connection.release();
+        await initializeDatabase();
+        await db.query("SELECT 1");
 
-        app.listen(PORT, () => {
-            console.log(`KMOS server running: http://localhost:${PORT}`);
+        console.log("Neon PostgreSQL connected successfully!");
+
+        app.listen(PORT, "0.0.0.0", () => {
+            console.log(`KMOS server running on port ${PORT}`);
         });
     } catch (error) {
-        console.error("MySQL connection error:", error.message);
+        console.error("Database startup error:", error.message);
         process.exit(1);
     }
 }
 
 startServer();
+
+// Graceful shutdown
+process.on("SIGTERM", async () => {
+    await db.end();
+    process.exit(0);
+});

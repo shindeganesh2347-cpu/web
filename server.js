@@ -7,14 +7,10 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Serve frontend files
 app.use(express.static(path.join(__dirname, "public")));
 
-// PostgreSQL connection
 if (!process.env.DATABASE_URL) {
     console.error("DATABASE_URL environment variable is missing.");
     process.exit(1);
@@ -28,7 +24,6 @@ const db = new Pool({
     idleTimeoutMillis: 30000
 });
 
-// Create table if it does not exist
 async function initializeDatabase() {
     await db.query(`
         CREATE TABLE IF NOT EXISTS designs (
@@ -45,12 +40,10 @@ async function initializeDatabase() {
     `);
 }
 
-// Home page
 app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "public", "home.html"));
 });
 
-// Health check
 app.get("/api/health", async (req, res) => {
     try {
         await db.query("SELECT 1");
@@ -67,7 +60,6 @@ app.get("/api/health", async (req, res) => {
     }
 });
 
-// Get all designs
 app.get("/api/designs", async (req, res) => {
     try {
         const result = await db.query(
@@ -80,7 +72,6 @@ app.get("/api/designs", async (req, res) => {
     }
 });
 
-// Get one design
 app.get("/api/designs/:id", async (req, res) => {
     try {
         const result = await db.query(
@@ -88,7 +79,7 @@ app.get("/api/designs/:id", async (req, res) => {
             [req.params.id]
         );
 
-        if (result.rows.length === 0) {
+        if (!result.rows.length) {
             return res.status(404).json({ error: "Design not found." });
         }
 
@@ -99,7 +90,6 @@ app.get("/api/designs/:id", async (req, res) => {
     }
 });
 
-// Add design
 app.post("/api/designs", async (req, res) => {
     const {
         design_no,
@@ -131,7 +121,7 @@ app.post("/api/designs", async (req, res) => {
     try {
         const result = await db.query(
             `INSERT INTO designs
-                (design_no, gala_no, colour, total_pcs, damage_pcs)
+             (design_no, gala_no, colour, total_pcs, damage_pcs)
              VALUES ($1, $2, $3, $4, $5)
              RETURNING *`,
             [
@@ -150,7 +140,6 @@ app.post("/api/designs", async (req, res) => {
     }
 });
 
-// Update design
 app.put("/api/designs/:id", async (req, res) => {
     const {
         design_no,
@@ -199,7 +188,7 @@ app.put("/api/designs/:id", async (req, res) => {
             ]
         );
 
-        if (result.rows.length === 0) {
+        if (!result.rows.length) {
             return res.status(404).json({ error: "Design not found." });
         }
 
@@ -210,7 +199,6 @@ app.put("/api/designs/:id", async (req, res) => {
     }
 });
 
-// Delete design
 app.delete("/api/designs/:id", async (req, res) => {
     try {
         const result = await db.query(
@@ -218,7 +206,7 @@ app.delete("/api/designs/:id", async (req, res) => {
             [req.params.id]
         );
 
-        if (result.rows.length === 0) {
+        if (!result.rows.length) {
             return res.status(404).json({ error: "Design not found." });
         }
 
@@ -232,7 +220,6 @@ app.delete("/api/designs/:id", async (req, res) => {
     }
 });
 
-// Start server
 async function startServer() {
     try {
         await initializeDatabase();
@@ -251,7 +238,6 @@ async function startServer() {
 
 startServer();
 
-// Graceful shutdown
 process.on("SIGTERM", async () => {
     await db.end();
     process.exit(0);
